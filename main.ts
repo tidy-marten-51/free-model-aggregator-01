@@ -272,32 +272,25 @@ async function serve(clientWire: 'openai' | 'anthropic', body: Json, res: Server
   let lastStatus = 502;
   let lastText = '';
   for (const candidate of candidates) {
-    // A refusal on a provider's own failure schedule is a single call number: the same candidate,
-    // retried once, usually answers at full rating. An outage or a spent budget refuses the retry
-    // too, and the loop moves on — the retry costs one upstream call and nothing else.
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      let result: UpstreamResult;
-      try {
-        result = await callCandidate(candidate, canonical);
-      } catch (err) {
-        lastStatus = 502;
-        lastText = (err as Error).message;
-        continue;
-      }
-      if (result.status < 200 || result.status >= 300 || result.body === null) {
-        lastStatus = result.status;
-        lastText = result.raw.slice(0, 500);
-        // A 4xx that is not a refusal (402/429) is this request's shape, not the provider's schedule:
-        // the same call would refuse again, so do not spend the retry on it.
-        if (result.status >= 400 && result.status < 500 && result.status !== 402 && result.status !== 429) break;
-        continue;
-      }
-      const completion = toCanonical(candidate, result.body);
-      if (completion === null) {
-        lastStatus = 502;
-        lastText = 'the provider answered a body that is not a usable answer';
-        continue;
-      }
+    let result: UpstreamResult;
+    try {
+      result = await callCandidate(candidate, canonical);
+    } catch (err) {
+      lastStatus = 502;
+      lastText = (err as Error).message;
+      continue;
+    }
+    if (result.status < 200 || result.status >= 300 || result.body === null) {
+      lastStatus = result.status;
+      lastText = result.raw.slice(0, 500);
+      continue;
+    }
+    const completion = toCanonical(candidate, result.body);
+    if (completion === null) {
+      lastStatus = 502;
+      lastText = 'the provider answered a body that is not a usable answer';
+      continue;
+    }
       if (clientWire === 'openai') {
         if (body.stream === true) sendSse(res, openAISseFromCompletion(completion));
         else sendJson(res, 200, completion);
@@ -308,7 +301,6 @@ async function serve(clientWire: 'openai' | 'anthropic', body: Json, res: Server
         else sendJson(res, 200, message);
       }
       return;
-    }
   }
   const status = lastStatus >= 400 && lastStatus <= 599 ? lastStatus : 502;
   sendError(res, clientWire, status, clientWire === 'anthropic' ? 'api_error' : 'upstream_error', `every free model that meets this request refused it; the last answered HTTP ${lastStatus}: ${lastText}`);
